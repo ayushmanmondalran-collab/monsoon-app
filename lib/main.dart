@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 
 void main() {
@@ -24,7 +23,6 @@ class MonsoonAIApp extends StatelessWidget {
           secondary: Color(0xFF818CF8),
           surface: Color(0xFF0F172A),
         ),
-        textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme),
       ),
       home: const MainDashboard(),
     );
@@ -51,7 +49,13 @@ class _MainDashboardState extends State<MainDashboard> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(child: _screens[_tabIndex]),
+      // IndexedStack preserves state across tab switches so search results are never lost
+      body: SafeArea(
+        child: IndexedStack(
+          index: _tabIndex,
+          children: _screens,
+        ),
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tabIndex,
         onDestinationSelected: (idx) => setState(() => _tabIndex = idx),
@@ -85,7 +89,7 @@ class _MainDashboardState extends State<MainDashboard> {
 }
 
 // -------------------------------------------------------------
-// TAB 1: UNIVERSAL SEARCH & 15-DAY (PAST 7D + TODAY + NEXT 7D)
+// TAB 1: ACCURATE SEARCH + 15-DAY TIMELINE (PRESERVES STATE)
 // -------------------------------------------------------------
 class ProfessionalWeatherSearchTab extends StatefulWidget {
   const ProfessionalWeatherSearchTab({super.key});
@@ -94,17 +98,25 @@ class ProfessionalWeatherSearchTab extends StatefulWidget {
   State<ProfessionalWeatherSearchTab> createState() => _ProfessionalWeatherSearchTabState();
 }
 
-class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearchTab> {
-  final TextEditingController _searchCtrl = TextEditingController(text: "Banpur, Nadia");
+class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearchTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true; // Keeps state alive when navigating tabs
 
-  String _currentPlaceName = "Banpur, West Bengal, India";
-  double _lat = 23.4500;
-  double _lon = 88.7600;
+  final TextEditingController _searchCtrl = TextEditingController(); // Blank initially
+
+  bool _hasSearched = false;
+  bool _searchingLocations = false;
+  List<Map<String, dynamic>> _matchedLocations = [];
+
+  String _currentPlaceName = "";
+  double _lat = 0.0;
+  double _lon = 0.0;
   String _regime = "Gangetic Deltaic Convective";
-  int _heavyRainProb = 58;
+  int _heavyRainProb = 50;
 
-  bool _loading = true;
-  int _selectedTimelineIndex = 7; // Index 7: TODAY
+  bool _loadingWeather = false;
+  int _selectedTimelineIndex = 7; // Index 7 is TODAY
 
   Map<String, dynamic>? _apiData;
   double _displayTemp = 0.0;
@@ -113,61 +125,86 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
   double _displayWind = 0.0;
   int _displayHumidity = 0;
 
-  @override
-  void initState() {
-    super.initState();
-    _fetchWeatherData();
-  }
-
-  Future<void> _searchLocation(String query) async {
+  // Search matching locations with detailed state/district context
+  Future<void> _queryLocations(String query) async {
     if (query.trim().isEmpty) return;
-    setState(() => _loading = true);
+    setState(() {
+      _searchingLocations = true;
+      _matchedLocations = [];
+    });
     FocusScope.of(context).unfocus();
 
     try {
       final geoUrl = Uri.parse(
-          'https://geocoding-api.open-meteo.com/v1/search?name=${Uri.encodeComponent(query)}&count=1&language=en&format=json');
+          'https://geocoding-api.open-meteo.com/v1/search?name=${Uri.encodeComponent(query)}&count=5&language=en&format=json');
       final geoRes = await http.get(geoUrl);
 
       if (geoRes.statusCode == 200) {
         final geoData = jsonDecode(geoRes.body);
-        if (geoData['results'] != null && geoData['results'].isNotEmpty) {
-          final first = geoData['results'][0];
+        if (geoData['results'] != null && (geoData['results'] as List).isNotEmpty) {
+          final List results = geoData['results'];
           setState(() {
-            _lat = (first['latitude'] as num).toDouble();
-            _lon = (first['longitude'] as num).toDouble();
+            _matchedLocations = results.map((item) {
+              final name = item['name'] ?? '';
+              final admin1 = item['admin1'] ?? '';
+              final admin2 = item['admin2'] ?? '';
+              final country = item['country'] ?? '';
 
-            final name = first['name'] ?? '';
-            final admin1 = first['admin1'] ?? '';
-            final country = first['country'] ?? '';
-            _currentPlaceName = "$name${admin1.isNotEmpty ? ', $admin1' : ''}${country.isNotEmpty ? ', $country' : ''}";
+              String display = name;
+              if (admin2.isNotEmpty && admin2 != name) display += ", $admin2";
+              if (admin1.isNotEmpty && admin1 != admin2) display += ", $admin1";
+              if (country.isNotEmpty) display += ", $country";
 
-            if (_lat > 27.0) {
-              _regime = "Himalayan Foothill Orographic";
-              _heavyRainProb = 78;
-            } else if (_lat < 21.5) {
-              _regime = "Coastal / Marine Trough";
-              _heavyRainProb = 74;
-            } else if (_lon > 85.0) {
-              _regime = "Gangetic Deltaic Convective";
-              _heavyRainProb = 62;
-            } else {
-              _regime = "Inland Monsoon Basin";
-              _heavyRainProb = 45;
-            }
+              return {
+                "display": display,
+                "lat": (item['latitude'] as num).toDouble(),
+                "lon": (item['longitude'] as num).toDouble(),
+              };
+            }).toList();
+            _searchingLocations = false;
           });
-          await _fetchWeatherData();
+
+          // If single match found directly, select it
+          if (_matchedLocations.length == 1) {
+            _selectLocation(_matchedLocations.first);
+          }
           return;
         }
       }
-      setState(() => _loading = false);
+      setState(() => _searchingLocations = false);
     } catch (_) {
-      setState(() => _loading = false);
+      setState(() => _searchingLocations = false);
     }
   }
 
+  void _selectLocation(Map<String, dynamic> loc) {
+    setState(() {
+      _currentPlaceName = loc["display"];
+      _lat = loc["lat"];
+      _lon = loc["lon"];
+      _matchedLocations = [];
+      _hasSearched = true;
+
+      // Dynamic Regime determination by precise coordinates
+      if (_lat > 27.0) {
+        _regime = "Himalayan Foothill Orographic";
+        _heavyRainProb = 78;
+      } else if (_lat < 21.5) {
+        _regime = "Coastal / Marine Trough";
+        _heavyRainProb = 74;
+      } else if (_lon > 85.0) {
+        _regime = "Gangetic Deltaic Convective";
+        _heavyRainProb = 62;
+      } else {
+        _regime = "Inland Monsoon Basin";
+        _heavyRainProb = 45;
+      }
+    });
+    _fetchWeatherData();
+  }
+
   Future<void> _fetchWeatherData() async {
-    setState(() => _loading = true);
+    setState(() => _loadingWeather = true);
     try {
       final url = Uri.parse(
         'https://api.open-meteo.com/v1/forecast?latitude=$_lat&longitude=$_lon'
@@ -181,12 +218,12 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
         final data = jsonDecode(res.body);
         _apiData = data;
         _updateDisplayMetrics();
-        setState(() => _loading = false);
+        setState(() => _loadingWeather = false);
       } else {
-        setState(() => _loading = false);
+        setState(() => _loadingWeather = false);
       }
     } catch (_) {
-      setState(() => _loading = false);
+      setState(() => _loadingWeather = false);
     }
   }
 
@@ -230,6 +267,8 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Required for AutomaticKeepAliveClientMixin
+
     final bool isSevere = _displayAiRain > 15.0 || _heavyRainProb >= 70;
     final Color alertCol = isSevere
         ? const Color(0xFFEF4444)
@@ -241,22 +280,23 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Column(
+            const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   'SIH 2026 • METEOROLOGICAL ENGINE',
-                  style: GoogleFonts.inter(
-                      fontSize: 11, color: const Color(0xFF38BDF8), fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                  style: TextStyle(
+                      fontSize: 11, color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, letterSpacing: 1.2),
                 ),
-                const SizedBox(height: 2),
-                Text('Monsoon AI Lens', style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold)),
+                SizedBox(height: 2),
+                Text('Monsoon AI Lens', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
               ],
             ),
-            IconButton(
-              icon: const Icon(Icons.sync_rounded, color: Color(0xFF38BDF8), size: 26),
-              onPressed: _fetchWeatherData,
-            ),
+            if (_hasSearched)
+              IconButton(
+                icon: const Icon(Icons.sync_rounded, color: Color(0xFF38BDF8), size: 26),
+                onPressed: _fetchWeatherData,
+              ),
           ],
         ),
         const SizedBox(height: 14),
@@ -277,9 +317,9 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
                 child: TextField(
                   controller: _searchCtrl,
                   textInputAction: TextInputAction.search,
-                  onSubmitted: (val) => _searchLocation(val),
+                  onSubmitted: (val) => _queryLocations(val),
                   decoration: const InputDecoration(
-                    hintText: "Search any Station / City (e.g. Banpur, Nadia)...",
+                    hintText: "Search any Station / City in India (e.g. Banpur, Kalyani)...",
                     hintStyle: TextStyle(color: Colors.white38, fontSize: 13),
                     border: InputBorder.none,
                   ),
@@ -287,164 +327,237 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
               ),
               IconButton(
                 icon: const Icon(Icons.search_rounded, color: Color(0xFF38BDF8)),
-                onPressed: () => _searchLocation(_searchCtrl.text),
+                onPressed: () => _queryLocations(_searchCtrl.text),
               ),
             ],
           ),
         ),
+
+        // MATCHED LOCATIONS PICKER (For Exact Disambiguation)
+        if (_searchingLocations)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(child: CircularProgressIndicator(color: Color(0xFF38BDF8))),
+          ),
+
+        if (_matchedLocations.isNotEmpty)
+          Container(
+            margin: const EdgeInsets.only(top: 10),
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.3)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                  child: Text('Select matching location for 100% accuracy:',
+                      style: TextStyle(fontSize: 11, color: Color(0xFF38BDF8), fontWeight: FontWeight.bold)),
+                ),
+                ..._matchedLocations.map((loc) {
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.place_rounded, color: Color(0xFF38BDF8), size: 20),
+                    title: Text(loc["display"], style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
+                    subtitle: Text('Coordinates: ${loc["lat"].toStringAsFixed(2)}°N, ${loc["lon"].toStringAsFixed(2)}°E',
+                        style: const TextStyle(fontSize: 10.5, color: Colors.white60)),
+                    trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Colors.white38),
+                    onTap: () => _selectLocation(loc),
+                  );
+                }),
+              ],
+            ),
+          ),
+
         const SizedBox(height: 16),
 
-        // 15-DAY TIMELINE SCROLLER
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Timeline Analysis (Past 7 Days  ⟷  Today Live  ⟷  Next 7 Days)',
-              style: TextStyle(fontSize: 12, color: Colors.white60, fontWeight: FontWeight.w600),
+        // IF NOT SEARCHED YET: SHOW WELCOME PLACEHOLDER
+        if (!_hasSearched)
+          Container(
+            padding: const EdgeInsets.all(32),
+            margin: const EdgeInsets.only(top: 20),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white10),
             ),
-            const SizedBox(height: 8),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: List.generate(15, (idx) {
-                  final isSelected = _selectedTimelineIndex == idx;
-                  final isToday = idx == 7;
-                  final isPast = idx < 7;
+            child: Column(
+              children: [
+                Icon(Icons.satellite_alt_rounded, size: 54, color: const Color(0xFF38BDF8).withOpacity(0.6)),
+                const SizedBox(height: 16),
+                const Text(
+                  'Hyper-Local AI Weather Engine',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Search any village, railway station, district or city in India above to begin live satellite ingestion and regime-aware bias correction.',
+                  style: TextStyle(fontSize: 12.5, color: Colors.white60, height: 1.4),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          )
+        else ...[
+          // 15-DAY TIMELINE SCROLLER
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Timeline Analysis (Past 7 Days  ⟷  Today Live  ⟷  Next 7 Days)',
+                style: TextStyle(fontSize: 12, color: Colors.white60, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: List.generate(15, (idx) {
+                    final isSelected = _selectedTimelineIndex == idx;
+                    final isToday = idx == 7;
+                    final isPast = idx < 7;
 
-                  Color pillCol = isSelected ? const Color(0xFF38BDF8) : const Color(0xFF0F172A);
-                  Color textCol = isSelected
-                      ? const Color(0xFF070D1E)
-                      : (isToday ? const Color(0xFF38BDF8) : (isPast ? Colors.white60 : Colors.white));
+                    Color pillCol = isSelected ? const Color(0xFF38BDF8) : const Color(0xFF0F172A);
+                    Color textCol = isSelected
+                        ? const Color(0xFF070D1E)
+                        : (isToday ? const Color(0xFF38BDF8) : (isPast ? Colors.white60 : Colors.white));
 
-                  return GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        _selectedTimelineIndex = idx;
-                        _updateDisplayMetrics();
-                      });
-                    },
-                    child: Container(
-                      margin: const EdgeInsets.only(right: 8),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: pillCol,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: isSelected
-                              ? const Color(0xFF38BDF8)
-                              : (isToday ? const Color(0xFF38BDF8).withOpacity(0.5) : Colors.white12),
-                          width: isToday ? 1.4 : 1.0,
+                    return GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _selectedTimelineIndex = idx;
+                          _updateDisplayMetrics();
+                        });
+                      },
+                      child: Container(
+                        margin: const EdgeInsets.only(right: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: pillCol,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isSelected
+                                ? const Color(0xFF38BDF8)
+                                : (isToday ? const Color(0xFF38BDF8).withOpacity(0.5) : Colors.white12),
+                            width: isToday ? 1.4 : 1.0,
+                          ),
                         ),
-                      ),
-                      child: Center(
-                        child: Text(
-                          _getTimelineLabel(idx),
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: isToday || isSelected ? FontWeight.bold : FontWeight.w500,
-                            color: textCol,
+                        child: Center(
+                          child: Text(
+                            _getTimelineLabel(idx),
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: isToday || isSelected ? FontWeight.bold : FontWeight.w500,
+                              color: textCol,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  );
-                }),
+                    );
+                  }),
+                ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
+            ],
+          ),
+          const SizedBox(height: 16),
 
-        // MAIN WEATHER CARD
-        _loading
-            ? const Center(child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator(color: Color(0xFF38BDF8))))
-            : Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [const Color(0xFF0F172A), alertCol.withOpacity(0.22)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
+          // MAIN WEATHER CARD
+          _loadingWeather
+              ? const Center(
+                  child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator(color: Color(0xFF38BDF8))))
+              : Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [const Color(0xFF0F172A), alertCol.withOpacity(0.22)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: alertCol.withOpacity(0.5), width: 1.2),
                       ),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: alertCol.withOpacity(0.5), width: 1.2),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  _currentPlaceName,
+                                  style: const TextStyle(
+                                      color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 14.5),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF38BDF8).withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(_regime,
+                                    style: const TextStyle(
+                                        color: Color(0xFF38BDF8), fontSize: 10.5, fontWeight: FontWeight.bold)),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text('${_displayTemp.toStringAsFixed(1)}°C',
+                                style: const TextStyle(fontSize: 42, fontWeight: FontWeight.bold)),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text('${_getTimelineLabel(_selectedTimelineIndex)} Risk',
+                                      style: const TextStyle(fontSize: 11.5, color: Colors.white70)),
+                                  Text('$_heavyRainProb%',
+                                      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: alertCol)),
+                                ],
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Wind Speed: ${_displayWind.toStringAsFixed(1)} km/h | Humidity: $_displayHumidity% | Grid: 4km Downscaled',
+                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          ),
+                        ],
+                      ),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    const SizedBox(height: 16),
+                    Row(
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Expanded(
-                              child: Text(
-                                _currentPlaceName,
-                                style: const TextStyle(color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 15),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF38BDF8).withOpacity(0.15),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(_regime,
-                                  style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 10.5, fontWeight: FontWeight.bold)),
-                            ),
-                          ],
+                        Expanded(
+                          child: _metricTile(
+                            title: _selectedTimelineIndex < 7 ? 'Historical Observed' : 'Raw NWP Model',
+                            value: '${_displayRawRain.toStringAsFixed(1)} mm',
+                            subtitle: 'Coarse 25km Grid',
+                            col: const Color(0xFF94A3B8),
+                          ),
                         ),
-                        const SizedBox(height: 14),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text('${_displayTemp.toStringAsFixed(1)}°C',
-                                style: GoogleFonts.poppins(fontSize: 42, fontWeight: FontWeight.bold)),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text('${_getTimelineLabel(_selectedTimelineIndex)} Risk',
-                                    style: const TextStyle(fontSize: 11.5, color: Colors.white70)),
-                                Text('$_heavyRainProb%',
-                                    style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold, color: alertCol)),
-                              ],
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Wind Speed: ${_displayWind.toStringAsFixed(1)} km/h | Humidity: $_displayHumidity% | Grid: 4km Downscaled',
-                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _metricTile(
+                            title: 'AI Corrected Spell',
+                            value: '${_displayAiRain.toStringAsFixed(1)} mm',
+                            subtitle: 'Regime Calibrated',
+                            col: const Color(0xFF38BDF8),
+                          ),
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _metricTile(
-                          title: _selectedTimelineIndex < 7 ? 'Historical Observed' : 'Raw NWP Model',
-                          value: '${_displayRawRain.toStringAsFixed(1)} mm',
-                          subtitle: 'Coarse 25km Grid',
-                          col: const Color(0xFF94A3B8),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _metricTile(
-                          title: 'AI Corrected Spell',
-                          value: '${_displayAiRain.toStringAsFixed(1)} mm',
-                          subtitle: 'Regime Calibrated',
-                          col: const Color(0xFF38BDF8),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+                  ],
+                ),
+        ],
       ],
     );
   }
@@ -462,7 +575,7 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
         children: [
           Text(title, style: const TextStyle(fontSize: 12, color: Colors.white70)),
           const SizedBox(height: 6),
-          Text(value, style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
+          Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
           const SizedBox(height: 2),
           Text(subtitle, style: TextStyle(fontSize: 11, color: col, fontWeight: FontWeight.w500)),
         ],
@@ -491,7 +604,7 @@ class RegimeMatrixTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text('Weather Regime Classification', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold)),
+        const Text('Weather Regime Classification', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 2),
         const Text('Identify prevailing atmospheric regime using AI/ML', style: TextStyle(color: Colors.white60, fontSize: 12)),
         const SizedBox(height: 16),
@@ -557,7 +670,7 @@ class VerificationMetricsTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text('Verification & Metrics', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold)),
+        const Text('Verification & Metrics', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 2),
         const Text('Compare AI Corrected forecast with actual & raw NWP', style: TextStyle(color: Colors.white60, fontSize: 12)),
         const SizedBox(height: 16),
@@ -623,7 +736,7 @@ class _SystemPipelineTabState extends State<SystemPipelineTab> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text('System Pipeline & Pitch Deck', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold)),
+        const Text('System Pipeline & Pitch Deck', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 2),
         const Text('End-to-End Technology Stack & Presentation Hub', style: TextStyle(color: Colors.white60, fontSize: 12)),
         const SizedBox(height: 16),
