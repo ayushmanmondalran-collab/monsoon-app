@@ -543,7 +543,10 @@ class RegimeMatrixTab extends StatelessWidget {
         ],
       ),
     );
-    // -------------------------------------------------------------
+  }
+}
+
+// -------------------------------------------------------------
 // TAB 3: VERIFICATION & EVALUATION METRICS
 // -------------------------------------------------------------
 class VerificationMetricsTab extends StatelessWidget {
@@ -697,7 +700,5 @@ class _SystemPipelineTabState extends State<SystemPipelineTab> {
         ],
       ),
     );
-  }
-}
   }
 }
