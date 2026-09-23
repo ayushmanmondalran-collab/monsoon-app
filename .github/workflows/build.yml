@@ -18,20 +18,10 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Recreate Android Project Scaffolding
+      - name: Recreate Android Clean Scaffolding
         run: |
+          rm -rf android
           flutter create --platforms=android --project-name monsoon_app .
-          # গ্র্যাডেলের ভেতর সরাসরি compileSdk ও minSdk ফোর্স সেট করা
-          cat << 'EOF' >> android/app/build.gradle
-
-          android {
-              compileSdkVersion 34
-              defaultConfig {
-                  minSdkVersion 21
-                  targetSdkVersion 34
-              }
-          }
-          EOF
 
       - name: Get Dependencies
         run: flutter pub get
