@@ -1,5 +1,5 @@
 name: monsoon_app
-description: Monsoon AI Lens - SIH 2026
+description: Monsoon AI Lens SIH 2026
 publish_to: "none"
 version: 1.0.0+1
 
@@ -9,7 +9,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  google_fonts: ^6.1.0
   http: ^1.2.0
 
 flutter:
