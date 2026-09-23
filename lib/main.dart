@@ -49,7 +49,6 @@ class _MainDashboardState extends State<MainDashboard> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // IndexedStack preserves state across tab switches so search results are never lost
       body: SafeArea(
         child: IndexedStack(
           index: _tabIndex,
@@ -89,7 +88,7 @@ class _MainDashboardState extends State<MainDashboard> {
 }
 
 // -------------------------------------------------------------
-// TAB 1: ACCURATE SEARCH + 15-DAY TIMELINE (PRESERVES STATE)
+// TAB 1: ACCURATE SEARCH + LIVE RAIN ANIMATION + 15-DAY TIMELINE
 // -------------------------------------------------------------
 class ProfessionalWeatherSearchTab extends StatefulWidget {
   const ProfessionalWeatherSearchTab({super.key});
@@ -99,11 +98,11 @@ class ProfessionalWeatherSearchTab extends StatefulWidget {
 }
 
 class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearchTab>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
   @override
-  bool get wantKeepAlive => true; // Keeps state alive when navigating tabs
+  bool get wantKeepAlive => true;
 
-  final TextEditingController _searchCtrl = TextEditingController(); // Blank initially
+  final TextEditingController _searchCtrl = TextEditingController();
 
   bool _hasSearched = false;
   bool _searchingLocations = false;
@@ -124,8 +123,26 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
   double _displayAiRain = 0.0;
   double _displayWind = 0.0;
   int _displayHumidity = 0;
+  int _weatherCode = 0;
 
-  // Search matching locations with detailed state/district context
+  late AnimationController _rainAnimCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _rainAnimCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _rainAnimCtrl.dispose();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _queryLocations(String query) async {
     if (query.trim().isEmpty) return;
     setState(() {
@@ -164,7 +181,6 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
             _searchingLocations = false;
           });
 
-          // If single match found directly, select it
           if (_matchedLocations.length == 1) {
             _selectLocation(_matchedLocations.first);
           }
@@ -185,7 +201,6 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
       _matchedLocations = [];
       _hasSearched = true;
 
-      // Dynamic Regime determination by precise coordinates
       if (_lat > 27.0) {
         _regime = "Himalayan Foothill Orographic";
         _heavyRainProb = 78;
@@ -208,8 +223,8 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
     try {
       final url = Uri.parse(
         'https://api.open-meteo.com/v1/forecast?latitude=$_lat&longitude=$_lon'
-        '&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m'
-        '&daily=temperature_2m_max,precipitation_sum,wind_speed_10m_max'
+        '&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m'
+        '&daily=temperature_2m_max,precipitation_sum,weather_code,wind_speed_10m_max'
         '&past_days=7&forecast_days=8&timezone=auto',
       );
 
@@ -236,12 +251,14 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
       _displayRawRain = (cur['precipitation'] as num).toDouble();
       _displayWind = (cur['wind_speed_10m'] as num).toDouble();
       _displayHumidity = (cur['relative_humidity_2m'] as num).toInt();
+      _weatherCode = (cur['weather_code'] as num).toInt();
     } else {
       final daily = _apiData!['daily'];
       _displayTemp = (daily['temperature_2m_max'][_selectedTimelineIndex] as num).toDouble();
       _displayRawRain = (daily['precipitation_sum'][_selectedTimelineIndex] as num).toDouble();
       _displayWind = (daily['wind_speed_10m_max'][_selectedTimelineIndex] as num).toDouble();
       _displayHumidity = 78;
+      _weatherCode = (daily['weather_code'][_selectedTimelineIndex] as num).toInt();
     }
 
     if (_regime.contains("Orographic")) {
@@ -251,6 +268,20 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
     } else {
       _displayAiRain = _displayRawRain > 0 ? (_displayRawRain * 1.45) + 3.0 : 4.2;
     }
+  }
+
+  String _getWeatherConditionDescription(int code) {
+    if (code >= 95) return "⛈️ Thunderstorm Active";
+    if (code >= 80) return "🌧️ Heavy Rain Showers";
+    if (code >= 61) return "🌧️ Continuous Rain Falling";
+    if (code >= 51) return "🌦️ Light Drizzle / Rain";
+    if (code >= 45) return "🌫️ Foggy & Mist";
+    if (code >= 1 && code <= 3) return "⛅ Partly Cloudy Sky";
+    return "☀️ Clear Weather";
+  }
+
+  bool _isRaining(int code) {
+    return (code >= 51 && code <= 67) || (code >= 80 && code <= 99) || _displayRawRain > 0;
   }
 
   String _getTimelineLabel(int idx) {
@@ -267,9 +298,10 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Required for AutomaticKeepAliveClientMixin
+    super.build(context);
 
-    final bool isSevere = _displayAiRain > 15.0 || _heavyRainProb >= 70;
+    final bool isRainingNow = _isRaining(_weatherCode);
+    final bool isSevere = _displayAiRain > 15.0 || _heavyRainProb >= 70 || _weatherCode >= 80;
     final Color alertCol = isSevere
         ? const Color(0xFFEF4444)
         : (_heavyRainProb >= 40 ? const Color(0xFFF59E0B) : const Color(0xFF10B981));
@@ -333,7 +365,7 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
           ),
         ),
 
-        // MATCHED LOCATIONS PICKER (For Exact Disambiguation)
+        // MATCHED LOCATIONS PICKER
         if (_searchingLocations)
           const Padding(
             padding: EdgeInsets.all(16),
@@ -374,7 +406,6 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
 
         const SizedBox(height: 16),
 
-        // IF NOT SEARCHED YET: SHOW WELCOME PLACEHOLDER
         if (!_hasSearched)
           Container(
             padding: const EdgeInsets.all(32),
@@ -464,99 +495,153 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
           ),
           const SizedBox(height: 16),
 
-          // MAIN WEATHER CARD
+          // MAIN WEATHER CARD WITH LIVE RAIN ANIMATION
           _loadingWeather
               ? const Center(
                   child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator(color: Color(0xFF38BDF8))))
-              : Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(18),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [const Color(0xFF0F172A), alertCol.withOpacity(0.22)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
+              : ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: Stack(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              const Color(0xFF0F172A),
+                              isRainingNow
+                                  ? const Color(0xFF0284C7).withOpacity(0.35)
+                                  : alertCol.withOpacity(0.22),
+                            ],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: isRainingNow
+                                ? const Color(0xFF38BDF8).withOpacity(0.8)
+                                : alertCol.withOpacity(0.5),
+                            width: isRainingNow ? 1.6 : 1.2,
+                          ),
                         ),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: alertCol.withOpacity(0.5), width: 1.2),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  _currentPlaceName,
-                                  style: const TextStyle(
-                                      color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 14.5),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF38BDF8).withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(_regime,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    _currentPlaceName,
                                     style: const TextStyle(
-                                        color: Color(0xFF38BDF8), fontSize: 10.5, fontWeight: FontWeight.bold)),
+                                      color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 14.5),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF38BDF8).withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(_regime,
+                                      style: const TextStyle(
+                                          color: Color(0xFF38BDF8), fontSize: 10.5, fontWeight: FontWeight.bold)),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+
+                            // LIVE WEATHER CONDITION BADGE (Rain / Thunderstorm / Cloudy)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: isRainingNow
+                                    ? const Color(0xFF0284C7).withOpacity(0.25)
+                                    : Colors.white10,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: isRainingNow
+                                      ? const Color(0xFF38BDF8).withOpacity(0.5)
+                                      : Colors.white12,
+                                ),
                               ),
-                            ],
-                          ),
-                          const SizedBox(height: 14),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text('${_displayTemp.toStringAsFixed(1)}°C',
-                                style: const TextStyle(fontSize: 42, fontWeight: FontWeight.bold)),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Text('${_getTimelineLabel(_selectedTimelineIndex)} Risk',
-                                      style: const TextStyle(fontSize: 11.5, color: Colors.white70)),
-                                  Text('$_heavyRainProb%',
-                                      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: alertCol)),
-                                ],
+                              child: Text(
+                                _getWeatherConditionDescription(_weatherCode),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: isRainingNow ? const Color(0xFF38BDF8) : Colors.white70,
+                                ),
                               ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Wind Speed: ${_displayWind.toStringAsFixed(1)} km/h | Humidity: $_displayHumidity% | Grid: 4km Downscaled',
-                            style: const TextStyle(color: Colors.white70, fontSize: 12),
-                          ),
-                        ],
+                            ),
+                            const SizedBox(height: 12),
+
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text('${_displayTemp.toStringAsFixed(1)}°C',
+                                    style: const TextStyle(fontSize: 42, fontWeight: FontWeight.bold)),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text('${_getTimelineLabel(_selectedTimelineIndex)} Risk',
+                                        style: const TextStyle(fontSize: 11.5, color: Colors.white70)),
+                                    Text('$_heavyRainProb%',
+                                        style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: alertCol)),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Wind Speed: ${_displayWind.toStringAsFixed(1)} km/h | Humidity: $_displayHumidity% | Grid: 4km Downscaled',
+                              style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _metricTile(
-                            title: _selectedTimelineIndex < 7 ? 'Historical Observed' : 'Raw NWP Model',
-                            value: '${_displayRawRain.toStringAsFixed(1)} mm',
-                            subtitle: 'Coarse 25km Grid',
-                            col: const Color(0xFF94A3B8),
+
+                      // FALLING RAIN DROPS OVERLAY (IF RAINING)
+                      if (isRainingNow)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: AnimatedBuilder(
+                              animation: _rainAnimCtrl,
+                              builder: (context, child) {
+                                return CustomPaint(
+                                  painter: LiveRainPainter(_rainAnimCtrl.value),
+                                );
+                              },
+                            ),
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _metricTile(
-                            title: 'AI Corrected Spell',
-                            value: '${_displayAiRain.toStringAsFixed(1)} mm',
-                            subtitle: 'Regime Calibrated',
-                            col: const Color(0xFF38BDF8),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _metricTile(
+                  title: _selectedTimelineIndex < 7 ? 'Historical Observed' : 'Live Raw Rainfall',
+                  value: '${_displayRawRain.toStringAsFixed(1)} mm',
+                  subtitle: isRainingNow ? 'Active Rain Falling' : 'Coarse 25km Grid',
+                  col: const Color(0xFF94A3B8),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _metricTile(
+                  title: 'AI Corrected Spell',
+                  value: '${_displayAiRain.toStringAsFixed(1)} mm',
+                  subtitle: 'Regime Calibrated',
+                  col: const Color(0xFF38BDF8),
+                ),
+              ),
+            ],
+          ),
         ],
       ],
     );
@@ -582,6 +667,38 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
       ),
     );
   }
+}
+
+// -------------------------------------------------------------
+// LIVE RAIN DROPLETS ANIMATION PAINTER
+// -------------------------------------------------------------
+class LiveRainPainter extends CustomPainter {
+  final double progress;
+  LiveRainPainter(this.progress);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF38BDF8).withOpacity(0.35)
+      ..strokeWidth = 1.4
+      ..strokeCap = StrokeCap.round;
+
+    final double dropLen = 14.0;
+    final int drops = 22;
+
+    for (int i = 0; i < drops; i++) {
+      double startX = (size.width / drops) * i + (i % 3) * 6;
+      double startY = ((progress + (i / drops)) % 1.0) * size.height;
+      canvas.drawLine(
+        Offset(startX, startY),
+        Offset(startX - 3, startY + dropLen),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant LiveRainPainter oldDelegate) => true;
 }
 
 // -------------------------------------------------------------
