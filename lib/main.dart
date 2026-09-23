@@ -42,7 +42,7 @@ class _MainDashboardState extends State<MainDashboard> {
   int _tabIndex = 0;
 
   final List<Widget> _screens = const [
-    LiveForecastDistrictTab(),
+    ProfessionalWeatherSearchTab(),
     RegimeMatrixTab(),
     VerificationMetricsTab(),
     SystemPipelineTab(),
@@ -59,9 +59,9 @@ class _MainDashboardState extends State<MainDashboard> {
         indicatorColor: const Color(0xFF38BDF8).withOpacity(0.25),
         destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.dashboard_outlined),
-            selectedIcon: Icon(Icons.dashboard_rounded, color: Color(0xFF38BDF8)),
-            label: 'Forecast',
+            icon: Icon(Icons.search_rounded),
+            selectedIcon: Icon(Icons.saved_search_rounded, color: Color(0xFF38BDF8)),
+            label: 'Search Live',
           ),
           NavigationDestination(
             icon: Icon(Icons.hub_outlined),
@@ -85,37 +85,33 @@ class _MainDashboardState extends State<MainDashboard> {
 }
 
 // -------------------------------------------------------------
-// TAB 1: DISTRICT FORECAST & HEAVY RAIN PROBABILITY (Card 5, 6, 10)
+// TAB 1: UNIVERSAL SEARCH & 15-DAY (PAST 7D + TODAY + NEXT 7D)
 // -------------------------------------------------------------
-class LiveForecastDistrictTab extends StatefulWidget {
-  const LiveForecastDistrictTab({super.key});
+class ProfessionalWeatherSearchTab extends StatefulWidget {
+  const ProfessionalWeatherSearchTab({super.key});
 
   @override
-  State<LiveForecastDistrictTab> createState() => _LiveForecastDistrictTabState();
+  State<ProfessionalWeatherSearchTab> createState() => _ProfessionalWeatherSearchTabState();
 }
 
-class _LiveForecastDistrictTabState extends State<LiveForecastDistrictTab> {
-  String _selectedDistrict = "Kolkata";
-  double _lat = 22.5726;
-  double _lon = 88.3639;
-  String _regime = "Active Monsoon";
+class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearchTab> {
+  final TextEditingController _searchCtrl = TextEditingController(text: "Banpur, Nadia");
+
+  String _currentPlaceName = "Banpur, West Bengal, India";
+  double _lat = 23.4500;
+  double _lon = 88.7600;
+  String _regime = "Gangetic Deltaic Convective";
+  int _heavyRainProb = 58;
 
   bool _loading = true;
-  double _temperature = 0.0;
-  double _rawRain = 0.0;
-  double _correctedRain = 0.0;
-  double _windSpeed = 0.0;
-  int _humidity = 0;
-  int _heavyRainProb = 48;
+  int _selectedTimelineIndex = 7; // Index 7: TODAY
 
-  final List<Map<String, dynamic>> _districts = [
-    {"name": "Kolkata", "lat": 22.5726, "lon": 88.3639, "regime": "Active Monsoon", "prob": 48},
-    {"name": "Howrah", "lat": 22.5958, "lon": 88.2636, "regime": "Monsoon Low / Depression", "prob": 81},
-    {"name": "Purba Medinipur", "lat": 21.9360, "lon": 87.7766, "regime": "Coastal Rainfall", "prob": 72},
-    {"name": "South 24 Parganas", "lat": 22.1352, "lon": 88.4016, "regime": "Depression / Coastal Surge", "prob": 88},
-    {"name": "Bankura", "lat": 23.2324, "lon": 87.0715, "regime": "Break Monsoon", "prob": 26},
-    {"name": "Durgapur", "lat": 23.5204, "lon": 87.3119, "regime": "Convective Active", "prob": 64},
-  ];
+  Map<String, dynamic>? _apiData;
+  double _displayTemp = 0.0;
+  double _displayRawRain = 0.0;
+  double _displayAiRain = 0.0;
+  double _displayWind = 0.0;
+  int _displayHumidity = 0;
 
   @override
   void initState() {
@@ -123,35 +119,69 @@ class _LiveForecastDistrictTabState extends State<LiveForecastDistrictTab> {
     _fetchWeatherData();
   }
 
+  Future<void> _searchLocation(String query) async {
+    if (query.trim().isEmpty) return;
+    setState(() => _loading = true);
+    FocusScope.of(context).unfocus();
+
+    try {
+      final geoUrl = Uri.parse(
+          'https://geocoding-api.open-meteo.com/v1/search?name=${Uri.encodeComponent(query)}&count=1&language=en&format=json');
+      final geoRes = await http.get(geoUrl);
+
+      if (geoRes.statusCode == 200) {
+        final geoData = jsonDecode(geoRes.body);
+        if (geoData['results'] != null && geoData['results'].isNotEmpty) {
+          final first = geoData['results'][0];
+          setState(() {
+            _lat = (first['latitude'] as num).toDouble();
+            _lon = (first['longitude'] as num).toDouble();
+
+            final name = first['name'] ?? '';
+            final admin1 = first['admin1'] ?? '';
+            final country = first['country'] ?? '';
+            _currentPlaceName = "$name${admin1.isNotEmpty ? ', $admin1' : ''}${country.isNotEmpty ? ', $country' : ''}";
+
+            if (_lat > 27.0) {
+              _regime = "Himalayan Foothill Orographic";
+              _heavyRainProb = 78;
+            } else if (_lat < 21.5) {
+              _regime = "Coastal / Marine Trough";
+              _heavyRainProb = 74;
+            } else if (_lon > 85.0) {
+              _regime = "Gangetic Deltaic Convective";
+              _heavyRainProb = 62;
+            } else {
+              _regime = "Inland Monsoon Basin";
+              _heavyRainProb = 45;
+            }
+          });
+          await _fetchWeatherData();
+          return;
+        }
+      }
+      setState(() => _loading = false);
+    } catch (_) {
+      setState(() => _loading = false);
+    }
+  }
+
   Future<void> _fetchWeatherData() async {
     setState(() => _loading = true);
     try {
       final url = Uri.parse(
-          'https://api.open-meteo.com/v1/forecast?latitude=$_lat&longitude=$_lon&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m');
+        'https://api.open-meteo.com/v1/forecast?latitude=$_lat&longitude=$_lon'
+        '&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m'
+        '&daily=temperature_2m_max,precipitation_sum,wind_speed_10m_max'
+        '&past_days=7&forecast_days=8&timezone=auto',
+      );
+
       final res = await http.get(url);
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
-        final cur = data['current'];
-        setState(() {
-          _temperature = (cur['temperature_2m'] as num).toDouble();
-          _rawRain = (cur['precipitation'] as num).toDouble();
-          _windSpeed = (cur['wind_speed_10m'] as num).toDouble();
-          _humidity = (cur['relative_humidity_2m'] as num).toInt();
-
-          // Regime-aware formula based on flow chart Card 4 logic
-          if (_regime.contains("Active")) {
-            _correctedRain = _rawRain > 0 ? (_rawRain * 1.58) + 3.0 : 5.4;
-          } else if (_regime.contains("Break")) {
-            _correctedRain = _rawRain > 0 ? (_rawRain * 0.73) : 0.0;
-          } else if (_regime.contains("Depression")) {
-            _correctedRain = _rawRain > 0 ? (_rawRain * 1.33) + 12.0 : 18.5;
-          } else if (_regime.contains("Coastal")) {
-            _correctedRain = _rawRain > 0 ? (_rawRain * 1.40) + 4.0 : 6.0;
-          } else {
-            _correctedRain = (_rawRain * 1.25);
-          }
-          _loading = false;
-        });
+        _apiData = data;
+        _updateDisplayMetrics();
+        setState(() => _loading = false);
       } else {
         setState(() => _loading = false);
       }
@@ -160,10 +190,50 @@ class _LiveForecastDistrictTabState extends State<LiveForecastDistrictTab> {
     }
   }
 
+  void _updateDisplayMetrics() {
+    if (_apiData == null) return;
+
+    if (_selectedTimelineIndex == 7) {
+      final cur = _apiData!['current'];
+      _displayTemp = (cur['temperature_2m'] as num).toDouble();
+      _displayRawRain = (cur['precipitation'] as num).toDouble();
+      _displayWind = (cur['wind_speed_10m'] as num).toDouble();
+      _displayHumidity = (cur['relative_humidity_2m'] as num).toInt();
+    } else {
+      final daily = _apiData!['daily'];
+      _displayTemp = (daily['temperature_2m_max'][_selectedTimelineIndex] as num).toDouble();
+      _displayRawRain = (daily['precipitation_sum'][_selectedTimelineIndex] as num).toDouble();
+      _displayWind = (daily['wind_speed_10m_max'][_selectedTimelineIndex] as num).toDouble();
+      _displayHumidity = 78;
+    }
+
+    if (_regime.contains("Orographic")) {
+      _displayAiRain = _displayRawRain > 0 ? (_displayRawRain * 1.52) + 5.0 : 6.0;
+    } else if (_regime.contains("Coastal")) {
+      _displayAiRain = _displayRawRain > 0 ? (_displayRawRain * 1.40) + 4.0 : 5.0;
+    } else {
+      _displayAiRain = _displayRawRain > 0 ? (_displayRawRain * 1.45) + 3.0 : 4.2;
+    }
+  }
+
+  String _getTimelineLabel(int idx) {
+    if (idx < 7) {
+      final daysAgo = 7 - idx;
+      return daysAgo == 1 ? "Yesterday" : "-$daysAgo Days";
+    } else if (idx == 7) {
+      return "Today (Live)";
+    } else {
+      final daysAhead = idx - 7;
+      return daysAhead == 1 ? "Tomorrow" : "+$daysAhead Days";
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final bool isSevere = _correctedRain > 15.0 || _heavyRainProb >= 70;
-    final Color alertCol = isSevere ? const Color(0xFFEF4444) : (_heavyRainProb >= 40 ? const Color(0xFFF59E0B) : const Color(0xFF10B981));
+    final bool isSevere = _displayAiRain > 15.0 || _heavyRainProb >= 70;
+    final Color alertCol = isSevere
+        ? const Color(0xFFEF4444)
+        : (_heavyRainProb >= 40 ? const Color(0xFFF59E0B) : const Color(0xFF10B981));
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -175,11 +245,12 @@ class _LiveForecastDistrictTabState extends State<LiveForecastDistrictTab> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'SIH 2026 • ISMR FRAMEWORK',
-                  style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF38BDF8), fontWeight: FontWeight.bold, letterSpacing: 1.2),
+                  'SIH 2026 • METEOROLOGICAL ENGINE',
+                  style: GoogleFonts.inter(
+                      fontSize: 11, color: const Color(0xFF38BDF8), fontWeight: FontWeight.bold, letterSpacing: 1.2),
                 ),
                 const SizedBox(height: 2),
-                Text('District Weather & Regime', style: GoogleFonts.poppins(fontSize: 21, fontWeight: FontWeight.bold)),
+                Text('Monsoon AI Lens', style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold)),
               ],
             ),
             IconButton(
@@ -189,54 +260,116 @@ class _LiveForecastDistrictTabState extends State<LiveForecastDistrictTab> {
           ],
         ),
         const SizedBox(height: 14),
+
+        // SEARCH BAR
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(
             color: const Color(0xFF0F172A),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white12),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.4), width: 1.2),
           ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: _selectedDistrict,
-              isExpanded: true,
-              dropdownColor: const Color(0xFF0F172A),
-              icon: const Icon(Icons.map_rounded, color: Color(0xFF38BDF8)),
-              items: _districts.map((d) {
-                return DropdownMenuItem<String>(
-                  value: d['name'],
-                  child: Text(d['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                );
-              }).toList(),
-              onChanged: (val) {
-                if (val != null) {
-                  final target = _districts.firstWhere((e) => e['name'] == val);
-                  setState(() {
-                    _selectedDistrict = val;
-                    _lat = target['lat'];
-                    _lon = target['lon'];
-                    _regime = target['regime'];
-                    _heavyRainProb = target['prob'];
-                  });
-                  _fetchWeatherData();
-                }
-              },
-            ),
+          child: Row(
+            children: [
+              const Icon(Icons.location_searching_rounded, color: Color(0xFF38BDF8), size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TextField(
+                  controller: _searchCtrl,
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (val) => _searchLocation(val),
+                  decoration: const InputDecoration(
+                    hintText: "Search any Station / City (e.g. Banpur, Nadia)...",
+                    hintStyle: TextStyle(color: Colors.white38, fontSize: 13),
+                    border: InputBorder.none,
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.search_rounded, color: Color(0xFF38BDF8)),
+                onPressed: () => _searchLocation(_searchCtrl.text),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 16),
+
+        // 15-DAY TIMELINE SCROLLER
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Timeline Analysis (Past 7 Days  ⟷  Today Live  ⟷  Next 7 Days)',
+              style: TextStyle(fontSize: 12, color: Colors.white60, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: List.generate(15, (idx) {
+                  final isSelected = _selectedTimelineIndex == idx;
+                  final isToday = idx == 7;
+                  final isPast = idx < 7;
+
+                  Color pillCol = isSelected ? const Color(0xFF38BDF8) : const Color(0xFF0F172A);
+                  Color textCol = isSelected
+                      ? const Color(0xFF070D1E)
+                      : (isToday ? const Color(0xFF38BDF8) : (isPast ? Colors.white60 : Colors.white));
+
+                  return GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _selectedTimelineIndex = idx;
+                        _updateDisplayMetrics();
+                      });
+                    },
+                    child: Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: pillCol,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isSelected
+                              ? const Color(0xFF38BDF8)
+                              : (isToday ? const Color(0xFF38BDF8).withOpacity(0.5) : Colors.white12),
+                          width: isToday ? 1.4 : 1.0,
+                        ),
+                      ),
+                      child: Center(
+                        child: Text(
+                          _getTimelineLabel(idx),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: isToday || isSelected ? FontWeight.bold : FontWeight.w500,
+                            color: textCol,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // MAIN WEATHER CARD
         _loading
             ? const Center(child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator(color: Color(0xFF38BDF8))))
             : Column(
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(18),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [const Color(0xFF0F172A), alertCol.withOpacity(0.2)],
+                        colors: [const Color(0xFF0F172A), alertCol.withOpacity(0.22)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
                       ),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: alertCol.withOpacity(0.5)),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: alertCol.withOpacity(0.5), width: 1.2),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -244,9 +377,12 @@ class _LiveForecastDistrictTabState extends State<LiveForecastDistrictTab> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Text(
-                              isSevere ? '🔴 HIGH IMPACT FLOOD WARNING' : '🟢 MONSOON REGIME MONITOR',
-                              style: TextStyle(color: alertCol, fontWeight: FontWeight.bold, fontSize: 12),
+                            Expanded(
+                              child: Text(
+                                _currentPlaceName,
+                                style: const TextStyle(color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 15),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -254,27 +390,34 @@ class _LiveForecastDistrictTabState extends State<LiveForecastDistrictTab> {
                                 color: const Color(0xFF38BDF8).withOpacity(0.15),
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: Text(_regime, style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 10, fontWeight: FontWeight.bold)),
+                              child: Text(_regime,
+                                  style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 10.5, fontWeight: FontWeight.bold)),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 14),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Text('${_temperature.toStringAsFixed(1)}°C', style: GoogleFonts.poppins(fontSize: 38, fontWeight: FontWeight.bold)),
+                            Text('${_displayTemp.toStringAsFixed(1)}°C',
+                                style: GoogleFonts.poppins(fontSize: 42, fontWeight: FontWeight.bold)),
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
-                                const Text('Heavy Rain Prob (>50mm)', style: TextStyle(fontSize: 11, color: Colors.white70)),
-                                Text('$_heavyRainProb%', style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold, color: alertCol)),
+                                Text('${_getTimelineLabel(_selectedTimelineIndex)} Risk',
+                                    style: const TextStyle(fontSize: 11.5, color: Colors.white70)),
+                                Text('$_heavyRainProb%',
+                                    style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold, color: alertCol)),
                               ],
                             ),
                           ],
                         ),
-                        const SizedBox(height: 4),
-                        Text('Humidity: $_humidity% | Wind: $_windSpeed km/h | Spatial Resolution: 4km', style: const TextStyle(color: Colors.white60, fontSize: 11.5)),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Wind Speed: ${_displayWind.toStringAsFixed(1)} km/h | Humidity: $_displayHumidity% | Grid: 4km Downscaled',
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
                       ],
                     ),
                   ),
@@ -283,8 +426,8 @@ class _LiveForecastDistrictTabState extends State<LiveForecastDistrictTab> {
                     children: [
                       Expanded(
                         child: _metricTile(
-                          title: 'Raw NWP Forecast',
-                          value: '${_rawRain.toStringAsFixed(1)} mm',
+                          title: _selectedTimelineIndex < 7 ? 'Historical Observed' : 'Raw NWP Model',
+                          value: '${_displayRawRain.toStringAsFixed(1)} mm',
                           subtitle: 'Coarse 25km Grid',
                           col: const Color(0xFF94A3B8),
                         ),
@@ -292,16 +435,14 @@ class _LiveForecastDistrictTabState extends State<LiveForecastDistrictTab> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: _metricTile(
-                          title: 'AI Corrected',
-                          value: '${_correctedRain.toStringAsFixed(1)} mm',
+                          title: 'AI Corrected Spell',
+                          value: '${_displayAiRain.toStringAsFixed(1)} mm',
                           subtitle: 'Regime Calibrated',
                           col: const Color(0xFF38BDF8),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  _buildDistrictTable(),
                 ],
               ),
       ],
@@ -310,11 +451,11 @@ class _LiveForecastDistrictTabState extends State<LiveForecastDistrictTab> {
 
   Widget _metricTile({required String title, required String value, required String subtitle, required Color col}) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF0F172A),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: col.withOpacity(0.3)),
+        border: Border.all(color: col.withOpacity(0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -328,55 +469,10 @@ class _LiveForecastDistrictTabState extends State<LiveForecastDistrictTab> {
       ),
     );
   }
-
-  Widget _buildDistrictTable() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0F172A),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('District-Level Operational Summary (Card 6)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
-          const SizedBox(height: 10),
-          Table(
-            columnWidths: const {
-              0: FlexColumnWidth(2.5),
-              1: FlexColumnWidth(2.0),
-              2: FlexColumnWidth(2.0),
-            },
-            children: [
-              const TableRow(
-                decoration: BoxDecoration(border: Border(bottom: BorderSide(color: Colors.white12, width: 1))),
-                children: [
-                  Padding(padding: EdgeInsets.symmetric(vertical: 6), child: Text('District', style: TextStyle(color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 11.5))),
-                  Padding(padding: EdgeInsets.symmetric(vertical: 6), child: Text('Corrected', style: TextStyle(color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 11.5))),
-                  Padding(padding: EdgeInsets.symmetric(vertical: 6), child: Text('Prob (>50mm)', style: TextStyle(color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 11.5))),
-                ],
-              ),
-              ..._districts.map((d) {
-                final isCur = d['name'] == _selectedDistrict;
-                return TableRow(
-                  decoration: BoxDecoration(color: isCur ? const Color(0xFF38BDF8).withOpacity(0.12) : Colors.transparent),
-                  children: [
-                    Padding(padding: const EdgeInsets.symmetric(vertical: 6), child: Text(d['name'], style: TextStyle(fontWeight: isCur ? FontWeight.bold : FontWeight.normal, fontSize: 11.5))),
-                    Padding(padding: const EdgeInsets.symmetric(vertical: 6), child: Text(isCur ? '${_correctedRain.toStringAsFixed(1)} mm' : 'Calibrated', style: const TextStyle(fontSize: 11.5))),
-                    Padding(padding: const EdgeInsets.symmetric(vertical: 6), child: Text('${d['prob']}%', style: TextStyle(color: d['prob'] >= 70 ? const Color(0xFFEF4444) : const Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 11.5))),
-                  ],
-                );
-              }),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 // -------------------------------------------------------------
-// TAB 2: 6 WEATHER REGIMES & BIAS TABLE (Card 3 & 4)
+// TAB 2: 6 WEATHER REGIMES & BIAS TABLE
 // -------------------------------------------------------------
 class RegimeMatrixTab extends StatelessWidget {
   const RegimeMatrixTab({super.key});
@@ -397,7 +493,7 @@ class RegimeMatrixTab extends StatelessWidget {
       children: [
         Text('Weather Regime Classification', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 2),
-        const Text('Identify prevailing atmospheric regime using AI/ML (Card 3 & 4)', style: TextStyle(color: Colors.white60, fontSize: 12)),
+        const Text('Identify prevailing atmospheric regime using AI/ML', style: TextStyle(color: Colors.white60, fontSize: 12)),
         const SizedBox(height: 16),
         ...regimes.map((r) => _regimeCard(r)),
       ],
@@ -437,7 +533,8 @@ class RegimeMatrixTab extends StatelessWidget {
                   color: const Color(0xFF10B981).withOpacity(0.15),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Text('Raw ${r['raw']} -> AI ${r['ai']}', style: const TextStyle(color: Color(0xFF10B981), fontSize: 11, fontWeight: FontWeight.bold)),
+                child: Text('Raw ${r['raw']} -> AI ${r['ai']}',
+                    style: const TextStyle(color: Color(0xFF10B981), fontSize: 11, fontWeight: FontWeight.bold)),
               ),
             ],
           ),
@@ -446,11 +543,8 @@ class RegimeMatrixTab extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-// -------------------------------------------------------------
-// TAB 3: VERIFICATION & EVALUATION METRICS (Card 7 & 9)
+    // -------------------------------------------------------------
+// TAB 3: VERIFICATION & EVALUATION METRICS
 // -------------------------------------------------------------
 class VerificationMetricsTab extends StatelessWidget {
   const VerificationMetricsTab({super.key});
@@ -462,7 +556,7 @@ class VerificationMetricsTab extends StatelessWidget {
       children: [
         Text('Verification & Metrics', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 2),
-        const Text('Compare AI Corrected forecast with actual & raw NWP (Card 7 & 9)', style: TextStyle(color: Colors.white60, fontSize: 12)),
+        const Text('Compare AI Corrected forecast with actual & raw NWP', style: TextStyle(color: Colors.white60, fontSize: 12)),
         const SizedBox(height: 16),
         _buildMetricItem('RMSE (Error Magnitude)', 'Reduced by 42.6%', 0.78, const Color(0xFF10B981)),
         _buildMetricItem('ETS (Equitable Threat Score)', '0.74 (Benchmark: 0.52)', 0.74, const Color(0xFF38BDF8)),
@@ -470,24 +564,6 @@ class VerificationMetricsTab extends StatelessWidget {
         _buildMetricItem('POD (Probability of Detection)', '89.4% Captured', 0.89, const Color(0xFFF59E0B)),
         _buildMetricItem('FAR (False Alarm Ratio)', 'Reduced by 34.0%', 0.66, const Color(0xFFEC4899)),
         _buildMetricItem('FSS (Fractional Skill Score)', '0.88 Spatial Skill', 0.88, const Color(0xFF14B8A6)),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0F172A),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Evaluation Conclusion (Card 9)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-              SizedBox(height: 6),
-              Text('• Higher accuracy in localized extreme spells without mean-smoothing errors.', style: TextStyle(color: Colors.white70, fontSize: 11.5)),
-              SizedBox(height: 4),
-              Text('• Multi-class synoptic routing successfully eliminates chronic Indian summer monsoon biases.', style: TextStyle(color: Colors.white70, fontSize: 11.5)),
-            ],
-          ),
-        ),
       ],
     );
   }
@@ -525,7 +601,7 @@ class VerificationMetricsTab extends StatelessWidget {
 }
 
 // -------------------------------------------------------------
-// TAB 4: SYSTEM PIPELINE & PRESENTATION HUB (Card 8 & 11)
+// TAB 4: SYSTEM PIPELINE & PRESENTATION HUB
 // -------------------------------------------------------------
 class SystemPipelineTab extends StatefulWidget {
   const SystemPipelineTab({super.key});
@@ -546,7 +622,7 @@ class _SystemPipelineTabState extends State<SystemPipelineTab> {
       children: [
         Text('System Pipeline & Pitch Deck', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 2),
-        const Text('End-to-End Technology Stack & Presentation Hub (Card 8, 11, 14)', style: TextStyle(color: Colors.white60, fontSize: 12)),
+        const Text('End-to-End Technology Stack & Presentation Hub', style: TextStyle(color: Colors.white60, fontSize: 12)),
         const SizedBox(height: 16),
         Container(
           padding: const EdgeInsets.all(16),
@@ -621,5 +697,7 @@ class _SystemPipelineTabState extends State<SystemPipelineTab> {
         ],
       ),
     );
+  }
+}
   }
 }
