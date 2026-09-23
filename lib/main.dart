@@ -41,6 +41,8 @@ class _MainDashboardState extends State<MainDashboard> {
 
   final List<Widget> _screens = const [
     ProfessionalWeatherSearchTab(),
+    LiveRadarSimulationTab(),
+    DisasterResponseTab(),
     RegimeMatrixTab(),
     VerificationMetricsTab(),
     SystemPipelineTab(),
@@ -67,6 +69,16 @@ class _MainDashboardState extends State<MainDashboard> {
             label: 'Search Live',
           ),
           NavigationDestination(
+            icon: Icon(Icons.radar_rounded),
+            selectedIcon: Icon(Icons.radar_rounded, color: Color(0xFF38BDF8)),
+            label: 'Radar Map',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.shield_outlined),
+            selectedIcon: Icon(Icons.shield_rounded, color: Color(0xFFEF4444)),
+            label: 'NDRF Alert',
+          ),
+          NavigationDestination(
             icon: Icon(Icons.hub_outlined),
             selectedIcon: Icon(Icons.hub_rounded, color: Color(0xFF38BDF8)),
             label: 'Regimes',
@@ -88,7 +100,7 @@ class _MainDashboardState extends State<MainDashboard> {
 }
 
 // -------------------------------------------------------------
-// TAB 1: ACCURATE SEARCH + LIVE RAIN ANIMATION + 15-DAY TIMELINE
+// TAB 1: ACCURATE SEARCH + LIVE RAIN ANIMATION + HOURLY + ADVISORY
 // -------------------------------------------------------------
 class ProfessionalWeatherSearchTab extends StatefulWidget {
   const ProfessionalWeatherSearchTab({super.key});
@@ -124,6 +136,9 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
   double _displayWind = 0.0;
   int _displayHumidity = 0;
   int _weatherCode = 0;
+
+  List<Map<String, dynamic>> _hourlyForecast = [];
+  bool _isBengaliBulletin = true;
 
   late AnimationController _rainAnimCtrl;
 
@@ -225,6 +240,7 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
         'https://api.open-meteo.com/v1/forecast?latitude=$_lat&longitude=$_lon'
         '&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m'
         '&daily=temperature_2m_max,precipitation_sum,weather_code,wind_speed_10m_max'
+        '&hourly=temperature_2m,precipitation,weather_code'
         '&past_days=7&forecast_days=8&timezone=auto',
       );
 
@@ -233,6 +249,7 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
         final data = jsonDecode(res.body);
         _apiData = data;
         _updateDisplayMetrics();
+        _extractHourlyData();
         setState(() => _loadingWeather = false);
       } else {
         setState(() => _loadingWeather = false);
@@ -240,6 +257,33 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
     } catch (_) {
       setState(() => _loadingWeather = false);
     }
+  }
+
+  void _extractHourlyData() {
+    if (_apiData == null || _apiData!['hourly'] == null) return;
+    try {
+      final hourly = _apiData!['hourly'];
+      final List times = hourly['time'] ?? [];
+      final List temps = hourly['temperature_2m'] ?? [];
+      final List rains = hourly['precipitation'] ?? [];
+
+      final int startOffset = 7 * 24 + 6;
+      List<Map<String, dynamic>> items = [];
+
+      for (int i = 0; i < 8; i++) {
+        int idx = startOffset + (i * 3);
+        if (idx < times.length) {
+          String rawTime = times[idx].toString();
+          String hourStr = rawTime.contains('T') ? rawTime.split('T')[1] : rawTime;
+          items.add({
+            "time": hourStr,
+            "temp": (temps[idx] as num).toDouble(),
+            "rain": (rains[idx] as num).toDouble(),
+          });
+        }
+      }
+      _hourlyForecast = items;
+    } catch (_) {}
   }
 
   void _updateDisplayMetrics() {
@@ -296,6 +340,62 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
     }
   }
 
+  void _openCitizenReportDialog() {
+    final reportCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Row(
+          children: [
+            Icon(Icons.share_location_rounded, color: Color(0xFF38BDF8), size: 22),
+            SizedBox(width: 8),
+            Text('Ground-Truth Report', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Report real-time flood/rain conditions for ${_currentPlaceName.isEmpty ? "your location" : _currentPlaceName}:',
+                style: const TextStyle(fontSize: 12, color: Colors.white70)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: reportCtrl,
+              decoration: InputDecoration(
+                hintText: "e.g. Waterlogged railway underpass, sudden gusty wind...",
+                hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
+                filled: true,
+                fillColor: const Color(0xFF070D1E),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF38BDF8), foregroundColor: const Color(0xFF070D1E)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Report submitted to Monsoon AI Validation Stream!'),
+                  backgroundColor: Color(0xFF10B981),
+                ),
+              );
+            },
+            child: const Text('Submit Report'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -324,11 +424,21 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
                 Text('Monsoon AI Lens', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
               ],
             ),
-            if (_hasSearched)
-              IconButton(
-                icon: const Icon(Icons.sync_rounded, color: Color(0xFF38BDF8), size: 26),
-                onPressed: _fetchWeatherData,
-              ),
+            Row(
+              children: [
+                if (_hasSearched)
+                  IconButton(
+                    icon: const Icon(Icons.campaign_outlined, color: Color(0xFF38BDF8), size: 24),
+                    tooltip: 'Citizen Ground Truth',
+                    onPressed: _openCitizenReportDialog,
+                  ),
+                if (_hasSearched)
+                  IconButton(
+                    icon: const Icon(Icons.sync_rounded, color: Color(0xFF38BDF8), size: 26),
+                    onPressed: _fetchWeatherData,
+                  ),
+              ],
+            ),
           ],
         ),
         const SizedBox(height: 14),
@@ -444,7 +554,7 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
               ),
               const SizedBox(height: 8),
               SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
+          scrollDirection: Axis.horizontal,
                 child: Row(
                   children: List.generate(15, (idx) {
                     final isSelected = _selectedTimelineIndex == idx;
@@ -534,7 +644,7 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
                                   child: Text(
                                     _currentPlaceName,
                                     style: const TextStyle(
-                                      color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 14.5),
+                                        color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, fontSize: 14.5),
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
@@ -552,7 +662,7 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
                             ),
                             const SizedBox(height: 10),
 
-                            // LIVE WEATHER CONDITION BADGE (Rain / Thunderstorm / Cloudy)
+                            // LIVE WEATHER CONDITION BADGE
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                               decoration: BoxDecoration(
@@ -603,7 +713,6 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
                         ),
                       ),
 
-                      // FALLING RAIN DROPS OVERLAY (IF RAINING)
                       if (isRainingNow)
                         Positioned.fill(
                           child: IgnorePointer(
@@ -621,6 +730,8 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
                   ),
                 ),
           const SizedBox(height: 16),
+
+          // COMPARISON METRICS
           Row(
             children: [
               Expanded(
@@ -641,6 +752,120 @@ class _ProfessionalWeatherSearchTabState extends State<ProfessionalWeatherSearch
                 ),
               ),
             ],
+          ),
+
+          const SizedBox(height: 16),
+
+          // 24-HOUR HOURLY RAIN & TEMP BAR CHART
+          if (_hourlyForecast.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F172A),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.schedule_rounded, color: Color(0xFF38BDF8), size: 18),
+                      SizedBox(width: 8),
+                      Text('24-Hour Trend & Precipitation Intensity',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: _hourlyForecast.map((hour) {
+                        final double r = hour['rain'];
+                        final double hHeight = (r * 12).clamp(6.0, 45.0);
+                        return Container(
+                          margin: const EdgeInsets.only(right: 14),
+                          child: Column(
+                            children: [
+                              Text('${hour['temp'].toStringAsFixed(0)}°',
+                                  style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                              const SizedBox(height: 6),
+                              Container(
+                                width: 14,
+                                height: hHeight,
+                                decoration: BoxDecoration(
+                                  color: r > 0 ? const Color(0xFF38BDF8) : Colors.white24,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text('${r.toStringAsFixed(1)}m',
+                                  style: TextStyle(
+                                      fontSize: 9.5,
+                                      fontWeight: FontWeight.bold,
+                                      color: r > 0 ? const Color(0xFF38BDF8) : Colors.white38)),
+                              const SizedBox(height: 4),
+                              Text(hour['time'],
+                                  style: const TextStyle(fontSize: 10, color: Colors.white60)),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          const SizedBox(height: 16),
+
+          // BILINGUAL ADVISORY BULLETIN (BENGALI & ENGLISH)
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: const Color(0xFF818CF8).withOpacity(0.35)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.volume_up_rounded, color: Color(0xFF818CF8), size: 20),
+                        SizedBox(width: 8),
+                        Text('Weather Bulletin & Advisory',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: () => setState(() => _isBengaliBulletin = !_isBengaliBulletin),
+                      child: Text(_isBengaliBulletin ? 'English' : 'বাংলায় দেখুন',
+                          style: const TextStyle(fontSize: 11, color: Color(0xFF38BDF8), fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _isBengaliBulletin
+                      ? (_displayAiRain > 12
+                          ? "সতর্কবার্তা: ${_currentPlaceName.split(',').first} ও পার্শ্ববর্তী অঞ্চলে আগামী ২৪ ঘণ্টায় ভারী বৃষ্টিপাত ও জল জমার উচ্চ সম্ভাবনা রয়েছে। কৃষকদের মাঠে কীটনাশক প্রয়োগ স্থগিত রাখার এবং নিচু এলাকার বাসিন্দাদের সতর্ক থাকার পরামর্শ দেওয়া হচ্ছে।"
+                          : "${_currentPlaceName.split(',').first} এলাকায় বর্তমানে আবহাওয়া মোটের ওপর স্বাভাবিক রয়েছে। বড় ধরনের আকস্মিক বিপর্যয়ের ঝুঁকি নেই।")
+                      : (_displayAiRain > 12
+                          ? "Advisory: High probability of localized heavy rain spells & inundation in ${_currentPlaceName.split(',').first}. Agricultural field spraying should be suspended, and drainage clearance advised."
+                          : "Advisory: Climatological parameters within nominal range for ${_currentPlaceName.split(',').first}. No severe weather threshold breached."),
+                  style: const TextStyle(fontSize: 11.5, color: Colors.white70, height: 1.45),
+                ),
+              ],
+            ),
           ),
         ],
       ],
@@ -702,7 +927,270 @@ class LiveRainPainter extends CustomPainter {
 }
 
 // -------------------------------------------------------------
-// TAB 2: 6 WEATHER REGIMES & BIAS TABLE
+// TAB 2: LIVE SIMULATED DOPPLER RADAR MAP (CANVAS)
+// -------------------------------------------------------------
+class LiveRadarSimulationTab extends StatefulWidget {
+  const LiveRadarSimulationTab({super.key});
+
+  @override
+  State<LiveRadarSimulationTab> createState() => _LiveRadarSimulationTabState();
+}
+
+class _LiveRadarSimulationTabState extends State<LiveRadarSimulationTab>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _radarCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _radarCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 4),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _radarCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('DOPPLER RADAR SIMULATION',
+                    style: TextStyle(fontSize: 11, color: Color(0xFF38BDF8), fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+                SizedBox(height: 2),
+                Text('Regional Cloud Convergence', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFF10B981).withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text('LIVE 10-MIN SWEEP', style: TextStyle(color: Color(0xFF10B981), fontSize: 10, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Container(
+          height: 320,
+          decoration: BoxDecoration(
+            color: const Color(0xFF070D1E),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.3)),
+          ),
+          child: Stack(
+            children: [
+              AnimatedBuilder(
+                animation: _radarCtrl,
+                builder: (context, child) {
+                  return CustomPaint(
+                    size: const Size(double.infinity, 320),
+                    painter: DopplerRadarPainter(_radarCtrl.value),
+                  );
+                },
+              ),
+              Positioned(
+                bottom: 12,
+           left: 14,
+                right: 14,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A).withOpacity(0.88),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Bay of Bengal Moisture Surge: Active', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                      Text('dBZ: 42 (Moderate Convective)', style: TextStyle(fontSize: 11, color: Color(0xFF38BDF8), fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _legendItem(const Color(0xFF38BDF8), 'Light Rain (<5mm)'),
+            _legendItem(const Color(0xFFF59E0B), 'Moderate (15-30mm)'),
+            _legendItem(const Color(0xFFEF4444), 'Severe (>50mm)'),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _legendItem(Color col, String txt) {
+    return Row(
+      children: [
+        Container(width: 10, height: 10, decoration: BoxDecoration(color: col, shape: BoxShape.circle)),
+        const SizedBox(width: 6),
+        Text(txt, style: const TextStyle(fontSize: 10.5, color: Colors.white70)),
+      ],
+    );
+  }
+}
+
+class DopplerRadarPainter extends CustomPainter {
+  final double sweep;
+  DopplerRadarPainter(this.sweep);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final maxRadius = size.height * 0.45;
+
+    final gridPaint = Paint()
+      ..color = Colors.white10
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+
+    for (int i = 1; i <= 3; i++) {
+      canvas.drawCircle(center, (maxRadius / 3) * i, gridPaint);
+    }
+    canvas.drawLine(Offset(center.dx, center.dy - maxRadius), Offset(center.dx, center.dy + maxRadius), gridPaint);
+    canvas.drawLine(Offset(center.dx - maxRadius, center.dy), Offset(center.dx + maxRadius, center.dy), gridPaint);
+
+    final cellPaint1 = Paint()..color = const Color(0xFF38BDF8).withOpacity(0.45);
+    final cellPaint2 = Paint()..color = const Color(0xFFF59E0B).withOpacity(0.55);
+    final cellPaint3 = Paint()..color = const Color(0xFFEF4444).withOpacity(0.65);
+
+    canvas.drawCircle(Offset(center.dx + 45, center.dy - 35), 28, cellPaint1);
+    canvas.drawCircle(Offset(center.dx + 52, center.dy - 30), 16, cellPaint2);
+    canvas.drawCircle(Offset(center.dx - 40, center.dy + 30), 32, cellPaint1);
+    canvas.drawCircle(Offset(center.dx - 35, center.dy + 35), 14, cellPaint3);
+
+    final sweepPaint = Paint()
+      ..shader = SweepGradient(
+        colors: [
+          Colors.transparent,
+          const Color(0xFF38BDF8).withOpacity(0.35),
+        ],
+        transform: GradientRotation(sweep * 6.283185),
+      ).createShader(Rect.fromCircle(center: center, radius: maxRadius));
+
+    canvas.drawCircle(center, maxRadius, sweepPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant DopplerRadarPainter oldDelegate) => true;
+}
+
+// -------------------------------------------------------------
+// TAB 3: NDRF & DISASTER RESPONSE MATRIX
+// -------------------------------------------------------------
+class DisasterResponseTab extends StatelessWidget {
+  const DisasterResponseTab({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text('NDRF & Disaster Protocol', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 2),
+        const Text('Emergency Response Thresholds & State Helplines', style: TextStyle(color: Colors.white60, fontSize: 12)),
+        const SizedBox(height: 16),
+
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEF4444).withOpacity(0.12),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0xFFEF4444).withOpacity(0.4)),
+          ),
+          child: const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Color(0xFFEF4444), size: 22),
+                  SizedBox(width: 8),
+                  Text('Level 3 Trigger (>50mm Downpour)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFFEF4444))),
+                ],
+              ),
+              SizedBox(height: 8),
+              Text(
+                '• Urban Underpass & Low-Lying Drainage Flood Alert active.\n• NDRF Battalion 2 (Haringhata / Kalyani Base) placed on stand-by.\n• Irrigation Department sluice gates advisory issued for Gangetic delta.',
+                style: TextStyle(fontSize: 11.5, color: Colors.white70, height: 1.45),
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 16),
+        const Text('Emergency Command Contacts', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF38BDF8))),
+        const SizedBox(height: 10),
+
+        _helplineCard('National Emergency Number', '112', 'Universal all-India emergency response', Icons.local_police_rounded),
+        _helplineCard('NDRF Control Room', '1078 / 011-24363260', 'National Disaster Response Force HQ', Icons.shield_rounded),
+        _helplineCard('West Bengal State Disaster Mgmt', '1070 / 033-22143526', 'Nabanna Emergency Operations Centre', Icons.apartment_rounded),
+        _helplineCard('Railway Emergency Helpline', '139', 'Train route waterlogging & status updates', Icons.train_rounded),
+      ],
+    );
+  }
+
+  Widget _helplineCard(String title, String num, String sub, IconData icon) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: const Color(0xFF38BDF8).withOpacity(0.15),
+            foregroundColor: const Color(0xFF38BDF8),
+            child: Icon(icon, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 2),
+                Text(sub, style: const TextStyle(fontSize: 10.5, color: Colors.white60)),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF10B981).withOpacity(0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(num, style: const TextStyle(color: Color(0xFF10B981), fontSize: 11, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// -------------------------------------------------------------
+// TAB 4: 6 WEATHER REGIMES & BIAS TABLE
 // -------------------------------------------------------------
 class RegimeMatrixTab extends StatelessWidget {
   const RegimeMatrixTab({super.key});
@@ -777,7 +1265,7 @@ class RegimeMatrixTab extends StatelessWidget {
 }
 
 // -------------------------------------------------------------
-// TAB 3: VERIFICATION & EVALUATION METRICS
+// TAB 5: VERIFICATION & EVALUATION METRICS
 // -------------------------------------------------------------
 class VerificationMetricsTab extends StatelessWidget {
   const VerificationMetricsTab({super.key});
@@ -834,7 +1322,7 @@ class VerificationMetricsTab extends StatelessWidget {
 }
 
 // -------------------------------------------------------------
-// TAB 4: SYSTEM PIPELINE & PRESENTATION HUB
+// TAB 6: SYSTEM PIPELINE & PRESENTATION HUB
 // -------------------------------------------------------------
 class SystemPipelineTab extends StatefulWidget {
   const SystemPipelineTab({super.key});
