@@ -21,8 +21,17 @@ jobs:
       - name: Recreate Android Project Scaffolding
         run: |
           flutter create --platforms=android --project-name monsoon_app .
-          sed -i 's/minSdkVersion = flutter.minSdkVersion/minSdkVersion = 21/g' android/app/build.gradle || true
-          sed -i 's/minSdk = flutter.minSdk/minSdk = 21/g' android/app/build.gradle || true
+          # গ্র্যাডেলের ভেতর সরাসরি compileSdk ও minSdk ফোর্স সেট করা
+          cat << 'EOF' >> android/app/build.gradle
+
+          android {
+              compileSdkVersion 34
+              defaultConfig {
+                  minSdkVersion 21
+                  targetSdkVersion 34
+              }
+          }
+          EOF
 
       - name: Get Dependencies
         run: flutter pub get
